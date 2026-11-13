@@ -148,6 +148,7 @@ python predict.py --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-c
 
 Repeat `--text` for multiple posts in order, or use `--text-file` for a UTF-8 file containing one post. With `--model-id`, prediction uses the Hub revision recorded in the checkpoint when available. For a local model or a checkpoint without a recorded revision, supply the same weights and tokenizer used for extraction. Use the same Transformers version if a newer release changes your tokenizer. Prediction uses the checkpoint's dataset, input length, pooling and dtype. An explicit `--max-tokens` must match the checkpoint. For a 4,096-column cumulative cache without encoder metadata, use the corresponding Meta-Llama-3-8B-Instruct resources and the 2,048-token definition.
 
-## Data access and citation
+## Dataset resources
 
-Cite the dataset and encoder used in your experiments. [Kaggle MBTI dataset](https://www.kaggle.com/datasets/datasnaek/mbti-type) · [Gjurković et al. (2021), PANDORA Talks](https://aclanthology.org/2021.socialnlp-1.12/) · [Meta-Llama-3-8B-Instruct model card](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct)
+- [Kaggle MBTI dataset](https://www.kaggle.com/datasets/datasnaek/mbti-type)
+- [Gjurković et al. (2021), PANDORA Talks](https://aclanthology.org/2021.socialnlp-1.12/)
