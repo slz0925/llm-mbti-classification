@@ -152,3 +152,48 @@ Repeat `--text` for multiple posts in order, or use `--text-file` for a UTF-8 fi
 
 - [Kaggle MBTI dataset](https://www.kaggle.com/datasets/datasnaek/mbti-type)
 - [Gjurković et al. (2021), PANDORA Talks](https://aclanthology.org/2021.socialnlp-1.12/)
+
+## Citation
+
+If you find this framework useful, please consider citing whichever of our papers are relevant to your work.
+
+```bibtex
+@inproceedings{shen2025emoperso,
+  title = {{EmoPerso}: Enhancing Personality Detection with Self-Supervised Emotion-Aware Modelling},
+  author = {Shen, Lingzhi and Cai, Xiaohao and Long, Yunfei and Razzak, Imran and Chen, Guanming and Jameel, Shoaib},
+  booktitle = {Proceedings of the 34th ACM International Conference on Information and Knowledge Management},
+  pages = {2577--2587},
+  year = {2025},
+  doi = {10.1145/3746252.3761247}
+}
+
+@inproceedings{shen2025ll4g,
+  title = {{LL4G}: Self-Supervised Dynamic Optimization for Graph-Based Personality Detection},
+  author = {Shen, Lingzhi and Long, Yunfei and Cai, Xiaohao and Chen, Guanming and Wang, Yuhan and Razzak, Imran and Jameel, Shoaib},
+  booktitle = {2025 IEEE International Conference on Multimedia and Expo (ICME)},
+  pages = {1--6},
+  year = {2025},
+  doi = {10.1109/ICME59968.2025.11209311}
+}
+
+@inproceedings{shen2025less,
+  title = {Less but Better: Parameter-Efficient Fine-Tuning of Large Language Models for Personality Detection},
+  author = {Shen, Lingzhi and Long, Yunfei and Cai, Xiaohao and Chen, Guanming and Razzak, Imran and Jameel, Shoaib},
+  booktitle = {2025 International Joint Conference on Neural Networks (IJCNN)},
+  pages = {1--8},
+  year = {2025},
+  doi = {10.1109/IJCNN64981.2025.11228339}
+}
+
+@inproceedings{chen2025hippd,
+  title = {{HIPPD}: Brain-Inspired Hierarchical Information Processing for Personality Detection},
+  author = {Chen, Guanming and Shen, Lingzhi and Cai, Xiaohao and Razzak, Imran and Jameel, Shoaib},
+  booktitle = {Proceedings of the 17th Asian Conference on Machine Learning},
+  series = {Proceedings of Machine Learning Research},
+  volume = {304},
+  pages = {910--925},
+  year = {2025},
+  publisher = {PMLR},
+  url = {https://proceedings.mlr.press/v304/chen26c.html}
+}
+```
