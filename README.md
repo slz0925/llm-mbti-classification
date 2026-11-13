@@ -1,6 +1,6 @@
 # LLM + Small Models for MBTI Personality Detection
 
-This project presents a simple, efficient approach to author-level MBTI prediction by combining pretrained large language models with lightweight classifiers. It caches one representation per author so that different classifiers can be trained on the same data splits without rerunning the encoder. In our experiments, Llama-3-8B paired with several lightweight classifiers comfortably outperformed pre-2025 state-of-the-art baselines on most metrics and achieved the highest average macro-F1 among the models compared.
+This project presents a simple, efficient approach to author-level MBTI prediction by combining pretrained large language models with lightweight classifiers. It caches one representation per author so that different classifiers can be trained on the same data splits without rerunning the encoder. In our experiments, Llama-3-8B paired with several lightweight classifiers comfortably outperformed pre-2025 state-of-the-art baselines, including [D-DGCN](https://doi.org/10.1609/aaai.v37i11.26627) and [TAE](https://doi.org/10.1609/aaai.v38i16.29782), on most metrics and achieved the highest average macro-F1 among the models compared.
 
 ## Architecture
 
