@@ -13,11 +13,10 @@ from data import DATASETS, MBTI_TYPES, SPLITS, new_directory, write_json
 
 
 URL = re.compile(r"http\S+", flags=re.MULTILINE)
-MENTIONS = (
-    "INTJ", "INTP", "INFP", "ENTP", "ISTP", "ISFP", "ESTJ", "ISTJ", "ESTP",
-    "ISFJ", "ENFP", "ESFP", "ESFJ", "ENFJ", "INFJ", "ENTJ", "TYPE_MENTION", "COGFUNC_MENTION",
+TYPE_MENTION = re.compile(
+    r"\b(?:" + "|".join((*MBTI_TYPES, "TYPE_MENTION", "COGFUNC_MENTION")) + r")\b",
+    re.IGNORECASE,
 )
-TYPE_PATTERNS = tuple(re.compile(label, re.IGNORECASE) for label in MENTIONS)
 PANDORA_POST_LIMIT = 2000
 PANDORA_MIN_WORDS = 6
 
@@ -26,9 +25,7 @@ def prepare_text(dataset, posts):
     """Apply the dataset policy to an ordered collection of one author's posts."""
     cleaned = []
     for post in posts:
-        post = URL.sub("", post)
-        for pattern in TYPE_PATTERNS:
-            post = pattern.sub("", post)
+        post = TYPE_MENTION.sub("", URL.sub("", post))
         if not post.strip():
             continue
         if dataset == "pandora" and len(post.split()) < PANDORA_MIN_WORDS:

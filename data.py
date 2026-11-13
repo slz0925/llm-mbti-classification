@@ -63,7 +63,8 @@ def encoder_settings(encoder):
     settings = {key: encoder[key] for key in keys if key in encoder}
     if (not isinstance(settings.get("model_id"), str) or not settings["model_id"]
             or type(settings.get("feature_dim")) is not int or settings["feature_dim"] < 1
-            or settings.get("max_tokens") != MAX_TOKENS or settings.get("padding_side") != "right"
+            or type(settings.get("max_tokens")) is not int or settings["max_tokens"] < 1
+            or settings.get("padding_side") != "right"
             or settings.get("pooling") not in POOLING.values()
             or settings.get("pad_token") not in ("eos", "native")
             or settings.get("dtype") not in ("bfloat16", "float32")):

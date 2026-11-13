@@ -38,6 +38,9 @@ def main():
     parser.add_argument("--encoder-device", default="auto")
     parser.add_argument("--encoder-dtype", choices=("bfloat16", "float32"))
     parser.add_argument("--pooling", choices=POOLING, help="Defaults to the checkpoint's pooling strategy")
+    parser.add_argument("--max-tokens", type=int, help="Defaults to the checkpoint's input length")
+    parser.add_argument("--trust-remote-code", action="store_true",
+                        help="Allow execution of reviewed custom model code for raw text")
     parser.add_argument("--device", default="auto", help="Classifier device")
     parser.add_argument("--batch-size", type=int, default=128)
     args = parser.parse_args()
@@ -66,6 +69,7 @@ def main():
             dtype = args.encoder_dtype or encoder["dtype"]
             extractor = LLMExtractor(
                 args.model_dir, args.encoder_device, dtype, expected=encoder, pooling=args.pooling,
+                max_tokens=args.max_tokens, trust_remote_code=args.trust_remote_code,
             )
             predictions = predict_text(model, state, posts, extractor, device)
     except (OSError, ValueError) as exc:

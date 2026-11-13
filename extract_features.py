@@ -19,6 +19,10 @@ def add_encoder_arguments(parser):
     parser.add_argument("--encoder-device", default="auto", help="auto, cpu or a CUDA device such as cuda:0")
     parser.add_argument("--encoder-dtype", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--pooling", choices=POOLING, default="last-position")
+    parser.add_argument("--max-tokens", type=int, default=MAX_TOKENS,
+                        help=f"Maximum input length in tokens (default: {MAX_TOKENS})")
+    parser.add_argument("--trust-remote-code", action="store_true",
+                        help="Allow execution of reviewed custom model code")
 
 
 def model_input_device(model):
@@ -34,27 +38,33 @@ def model_input_device(model):
 
 
 class LLMExtractor:
-    def __init__(self, model_dir, device="auto", dtype="bfloat16", expected=None, *, pooling=None):
+    def __init__(self, model_dir, device="auto", dtype="bfloat16", expected=None, *,
+                 pooling=None, max_tokens=None, trust_remote_code=False):
         import transformers
         from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
         model_dir = Path(model_dir).resolve()
         if not (model_dir / "config.json").is_file():
             raise ValueError(f"Expected a local Transformers model directory: {model_dir}")
-        local = {"local_files_only": True, "trust_remote_code": False}
+        expected = encoder_settings(expected)
+        if max_tokens is None:
+            max_tokens = expected["max_tokens"] if expected else MAX_TOKENS
+        if type(max_tokens) is not int or max_tokens < 1:
+            raise ValueError("max_tokens must be a positive integer")
+        if expected and max_tokens != expected["max_tokens"]:
+            raise ValueError("Encoder max_tokens does not match the classifier's feature cache")
+
+        local = {"local_files_only": True, "trust_remote_code": trust_remote_code}
         config = AutoConfig.from_pretrained(model_dir, **local)
-        width = getattr(config.get_text_config(), "hidden_size", None)
-        mapping = AutoModelForCausalLM._model_mapping
-        if config.is_encoder_decoder or type(config) not in mapping:
-            raise ValueError(f"{config.model_type} is not a supported Transformers decoder-only causal LM")
-        implementations = mapping[type(config)]
-        if not isinstance(implementations, tuple):
-            implementations = (implementations,)
-        if config.architectures and not any(cls.__name__ in config.architectures for cls in implementations):
-            raise ValueError(f"{config.architectures} does not identify a supported causal LM for {config.model_type}")
+        if config.is_encoder_decoder:
+            raise ValueError(f"{config.model_type} is an encoder–decoder model; a decoder-only causal LM is required")
+        text_config = config.get_text_config()
+        width = getattr(text_config, "hidden_size", None)
         if type(width) is not int or width < 1:
             raise ValueError(f"{config.model_type} does not declare a valid hidden_size")
-        expected = encoder_settings(expected)
+        context = getattr(text_config, "max_position_embeddings", None)
+        if type(context) is int and 0 < context < max_tokens:
+            raise ValueError(f"max_tokens={max_tokens} exceeds the model's configured context of {context} tokens")
         method = POOLING[pooling] if pooling else (
             expected["pooling"] if expected else POOLING["last-position"]
         )
@@ -75,7 +85,7 @@ class LLMExtractor:
             raise ValueError("The tokenizer needs a padding token or an EOS token for fixed-length inputs")
         self.provenance = {
             "model_id": name, "model_type": config.model_type, "feature_dim": width,
-            "max_tokens": MAX_TOKENS, "padding_side": "right", "pad_token": pad_policy,
+            "max_tokens": max_tokens, "padding_side": "right", "pad_token": pad_policy,
             "pad_token_id": self.tokenizer.pad_token_id, "pooling": method, "dtype": dtype,
             "tokenizer_class": type(self.tokenizer).__name__, "tokenizer_size": len(self.tokenizer),
         }
@@ -96,25 +106,31 @@ class LLMExtractor:
         self.provenance["transformers_version"] = transformers.__version__
         self.provenance["torch_version"] = str(torch.__version__)
         placement = "auto" if device == "auto" else {"": str(torch.device(device))}
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_dir, config=config, dtype=getattr(torch, dtype), device_map=placement, **local,
-        ).eval()
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_dir, config=config, dtype=getattr(torch, dtype), device_map=placement, **local,
+            ).eval()
+        except ValueError as exc:
+            raise ValueError(f"Could not load {config.model_type} as a Transformers causal LM: {exc}") from exc
         self.device = model_input_device(self.model)
         self.feature_dim = width
 
     @torch.inference_mode()
     def encode(self, texts):
         tokens = self.tokenizer(
-            texts, return_tensors="pt", padding="max_length", max_length=MAX_TOKENS, truncation=True,
+            texts, return_tensors="pt", padding="max_length",
+            max_length=self.provenance["max_tokens"], truncation=True,
         )
         mask = tokens["attention_mask"].to(self.device)
         result = self.model(
             input_ids=tokens["input_ids"].to(self.device),
             attention_mask=mask,
-            output_hidden_states=True, use_cache=False,
+            output_hidden_states=True, use_cache=False, return_dict=True,
         )
         states = getattr(result, "hidden_states", None)
-        if not states or states[-1].ndim != 3 or states[-1].shape[:2] != mask.shape:
+        if (not isinstance(states, (tuple, list)) or not states
+                or not torch.is_tensor(states[-1]) or states[-1].ndim != 3
+                or states[-1].shape[:2] != mask.shape):
             raise ValueError("Encoder must return token-level hidden states for the input sequence")
         hidden = states[-1]
         if self.provenance["pooling"] == POOLING["last-position"]:
@@ -177,6 +193,7 @@ def main():
     try:
         extractor = LLMExtractor(
             args.model_dir, args.encoder_device, args.encoder_dtype, pooling=args.pooling,
+            max_tokens=args.max_tokens, trust_remote_code=args.trust_remote_code,
         )
         counts = extract_cache(args.prepared, args.output, extractor, args.batch_size)
     except (OSError, ValueError) as exc:
