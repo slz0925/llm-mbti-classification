@@ -47,13 +47,15 @@ Each run trains a separate classifier for one target. The 16-way task learns dir
 
 ## Installation and local resources
 
-Use Python 3.10 or later and an isolated virtual environment. Install PyTorch 2.6 or later for your Python version and CPU or CUDA setup using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then install the project dependencies.
+Use Python 3.10 or later and an isolated virtual environment. Install PyTorch 2.6 or later for your Python version and CPU or CUDA setup using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then choose one of the following installation options.
+
+**Using cached features.** For classifier training, evaluation or prediction from a feature CSV, install the core dependencies.
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-Install the encoder dependencies for feature extraction or raw-text prediction. They require Transformers 4.56 or later.
+**Using an encoder.** For feature extraction or raw-text prediction, install the encoder dependencies. These include the core dependencies and require Transformers 4.56 or later.
 
 ```bash
 python -m pip install -r requirements-encoder.txt
@@ -63,13 +65,13 @@ Choose a decoder-only causal language model that accepts text token IDs and retu
 
 Install additional packages if your model requires them, such as `sentencepiece` and `protobuf` for tokenizers that need SentencePiece conversion. Custom model code is disabled by default. Add `--trust-remote-code` only after reviewing the code you intend to run.
 
-Extraction defaults to BF16 and automatic device placement. Use `--encoder-device cuda:0` to select a GPU explicitly or `--encoder-dtype float32` when needed. Classifier-only commands use the core requirements. PyTorch classifiers and XGBoost support CPU and CUDA. The other scikit-learn classifiers run on CPU.
+Extraction defaults to BF16 and automatic device placement. Use `--encoder-device cuda:0` to select a GPU explicitly or `--encoder-dtype float32` when needed. PyTorch classifiers and XGBoost support CPU and CUDA. The other scikit-learn classifiers run on CPU.
 
 ## Data preparation
 
 Obtain the datasets separately and keep all source data, prepared splits and feature caches local. Choose the applicable preparation command from the repository root.
 
-The examples use `data/` for source datasets, `prepared/` for processed splits, `features/` for feature caches, `models/` for local encoders, `checkpoints/` for trained classifiers and `results/` for evaluation output. Pass your own paths as needed. Output commands create their parent directories.
+The examples use `data/` for source datasets, `prepared/` for processed splits, `features/` for feature caches, `models/` for local encoders, `checkpoints/` for trained classifiers and `results/` for evaluation output. Pass your own paths as needed. For `prepare_data.py` and `extract_features.py`, pass an `--output` directory that does not yet exist. The scripts create any missing parent directories.
 
 **Kaggle.** Download the [Myers-Briggs Personality Type Dataset](https://www.kaggle.com/datasets/datasnaek/mbti-type) and use its `type` and `posts` columns. Each row represents one author and uses `|||` to separate posts.
 
@@ -94,11 +96,15 @@ python extract_features.py --prepared prepared/kaggle --model-dir models/Meta-Ll
 python extract_features.py --prepared prepared/kaggle --model-id Qwen/Qwen3-14B --pooling last-token --max-tokens 8192 --output features/kaggle/qwen3-14b-last-token-8192
 ```
 
-For PANDORA, use the corresponding prepared and output directories. Each split produces a feature CSV with a sample ID and columns `0` through `hidden_size - 1` (4,096 features for Llama-3-8B), paired with a label CSV in the same sample order. The manifest records the dataset, split sizes, cache ID, model, feature width, input length, dtype and pooling. For Hub models it also records the resolved commit ID. Choose a length within the model's context and use a separate cache for each encoder, input length and pooling combination. Train and evaluate with the same cache, and reuse it across classifiers or tasks.
+For PANDORA, use the corresponding prepared and output directories. Set `--pooling`, `--max-tokens` and `--encoder-dtype` to suit your model and task, keeping the input length within the model's context. Use a separate cache for each encoder and set of extraction settings.
+
+Each split produces a feature CSV with a sample ID and columns `0` through `hidden_size - 1` (4,096 features for Llama-3-8B), paired with a label CSV in the same sample order. The manifest records the dataset, split sizes, cache ID, model, feature width, input length, dtype and pooling. For Hub models it also records the resolved commit ID.
 
 For a 4,096-column cumulative cache, pass the directory containing `eval.csv` and `train_label.csv`, `test_label.csv` and `eval_label.csv`. The loader aligns labels with the train, test and validation blocks of `eval.csv` by row order.
 
 ## Training and evaluation
+
+The `--features` argument in `train.py` and `evaluate.py` takes a cache directory. You can reuse a compatible cache across classifiers and tasks. For evaluation, use the exact cache used for training and its corresponding checkpoint.
 
 ```bash
 python train.py --dataset kaggle --features features/kaggle/llama3-last-position --classifier linear --task ie --epochs 30 --checkpoint checkpoints/kaggle-linear-ie.pt
@@ -123,17 +129,17 @@ Like the PyTorch classifiers, XGBoost supports `--device auto` (the default), `-
 
 PyTorch classifiers use Adam and cross-entropy with full-batch updates by default. Set `--lr`, `--epochs` and `--batch-size` as needed. Validation macro-F1 selects the epoch, and `.pt` stores a state dictionary. Logistic regression and the SVMs compare `C=0.1` and `C=1.0`. Random forest compares unlimited depth and depth 12. XGBoost compares depths 3 and 6 with 100 boosting rounds. Each candidate is fitted on training rows only, including any standardisation, and validation macro-F1 selects the fitted estimator. RBF SVM can take substantially longer on large splits. Load `.joblib` checkpoints only from trusted sources with `--trust-checkpoint`, using the same library versions as for training.
 
-Run the separate test command after model selection. It reports accuracy, macro-F1, macro precision and macro recall, plus a majority-class baseline fitted to the training labels. Macro metrics give every class equal weight and assign zero to undefined per-class scores.
+Use `evaluate.py` to evaluate the selected checkpoint on the held-out test set. It reports accuracy, macro-F1, macro precision and macro recall, plus a majority-class baseline fitted to the training labels. Macro metrics give every class equal weight and assign zero to undefined per-class scores.
 
 ## Inference
 
-Predict from a compatible feature CSV to get one JSON record per input row. The command accepts feature CSVs with or without a sample ID column. For a standalone CSV, use features from the checkpoint's encoder and pooling settings.
+If you already have features, pass a compatible CSV file to `predict.py --features` and provide the matching classifier checkpoint. This produces one JSON record per row without loading the LLM. Feature columns must be numbered consecutively from `0`, with an optional `sample_id` column first. Use features produced with the same encoder, input length, pooling, precision and preprocessing as the training features.
 
 ```bash
 python predict.py --checkpoint checkpoints/kaggle-linear-ie.pt --features features/kaggle/llama3-last-position/test.csv
 ```
 
-For an author whose text has not been encoded, provide one or more posts and select the encoder used to build the training cache.
+For raw-text prediction, provide one or more posts from one author and select the encoder used to build the training cache. Prediction applies the cleaning rules for the checkpoint's dataset. For PANDORA, it discards posts with fewer than six words after cleaning.
 
 ```bash
 python predict.py --checkpoint checkpoints/kaggle-linear-ie.pt --model-dir models/Meta-Llama-3-8B-Instruct --text "I spent the afternoon sketching plans for a small garden."
