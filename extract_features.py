@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,8 +15,14 @@ from data import (
 )
 
 
+def add_model_source_arguments(parser, *, required=False):
+    sources = parser.add_mutually_exclusive_group(required=required)
+    sources.add_argument("--model-dir", type=Path, help="Local Transformers model directory")
+    sources.add_argument("--model-id", help="Hugging Face Hub model ID")
+
+
 def add_encoder_arguments(parser):
-    parser.add_argument("--model-dir", type=Path, required=True, help="Local Transformers model directory")
+    add_model_source_arguments(parser, required=True)
     parser.add_argument("--encoder-device", default="auto", help="auto, cpu or a CUDA device such as cuda:0")
     parser.add_argument("--encoder-dtype", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--pooling", choices=POOLING, default="last-position")
@@ -37,16 +44,48 @@ def model_input_device(model):
     return device
 
 
+def load_encoder_asset(loader, source, options, **kwargs):
+    try:
+        return loader(source, **options, **kwargs)
+    except (OSError, ValueError) as exc:
+        if "revision" in options:
+            raise ValueError(f"Could not load Hub model {source} at revision {options['revision']}: {exc}") from exc
+        raise
+
+
 class LLMExtractor:
-    def __init__(self, model_dir, device="auto", dtype="bfloat16", expected=None, *,
-                 pooling=None, max_tokens=None, trust_remote_code=False):
+    def __init__(self, model_dir=None, device="auto", dtype="bfloat16", expected=None, *,
+                 model_id=None, pooling=None, max_tokens=None, trust_remote_code=False):
         import transformers
         from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-        model_dir = Path(model_dir).resolve()
-        if not (model_dir / "config.json").is_file():
-            raise ValueError(f"Expected a local Transformers model directory: {model_dir}")
+        if (model_dir is None) == (model_id is None):
+            raise ValueError("Specify exactly one of --model-dir and --model-id")
         expected = encoder_settings(expected)
+        expected_revision = expected.get("revision") if expected else None
+        revision = None
+        options = {"local_files_only": model_dir is not None, "trust_remote_code": trust_remote_code}
+        if model_dir is not None:
+            source = Path(model_dir).resolve()
+            if not (source / "config.json").is_file():
+                raise ValueError(f"Expected a local Transformers model directory: {source}")
+            name = source.name
+            repository = source.parent.parent.name
+            if source.parent.name == "snapshots" and repository.startswith("models--"):
+                name = repository.removeprefix("models--").replace("--", "/")
+                if re.fullmatch(r"[0-9a-f]{40}", source.name):
+                    revision = source.name
+            elif name.casefold() == LEGACY_MODEL_ID.casefold().split("/")[-1]:
+                name = LEGACY_MODEL_ID
+        else:
+            from huggingface_hub.utils import validate_repo_id
+
+            validate_repo_id(model_id)
+            # Transformers also accepts local paths in from_pretrained().
+            if Path(model_id).exists():
+                raise ValueError(f"A local path shadows Hub model ID {model_id}; run from another directory")
+            source = name = model_id
+
         if max_tokens is None:
             max_tokens = expected["max_tokens"] if expected else MAX_TOKENS
         if type(max_tokens) is not int or max_tokens < 1:
@@ -54,8 +93,42 @@ class LLMExtractor:
         if expected and max_tokens != expected["max_tokens"]:
             raise ValueError("Encoder max_tokens does not match the classifier's feature cache")
 
-        local = {"local_files_only": True, "trust_remote_code": trust_remote_code}
-        config = AutoConfig.from_pretrained(model_dir, **local)
+        if expected is not None:
+            trained_name = expected["model_id"]
+            legacy = "model_type" not in expected and trained_name == LEGACY_MODEL_ID
+            # A regular local folder may carry only the model name.
+            same_name = name == trained_name or (
+                ("/" not in name or "/" not in trained_name)
+                and name.rsplit("/", 1)[-1] == trained_name.rsplit("/", 1)[-1]
+            )
+            if not same_name and not (legacy and model_dir is not None):
+                raise ValueError("Encoder model_id does not match the classifier's feature cache")
+            if revision and expected_revision and revision != expected_revision:
+                raise ValueError(f"Encoder revision {revision} does not match checkpoint revision {expected_revision}")
+
+        if model_id is not None:
+            from huggingface_hub import hf_hub_download
+            from huggingface_hub.errors import GatedRepoError, HfHubHTTPError, RevisionNotFoundError
+
+            # The Hub returns the configuration path in its resolved commit snapshot.
+            try:
+                config_path = Path(hf_hub_download(model_id, "config.json", revision=expected_revision))
+            except (HfHubHTTPError, OSError, ValueError) as exc:
+                requested = f"revision {expected_revision}" if expected_revision else "its default revision"
+                if isinstance(exc, RevisionNotFoundError):
+                    detail = "revision not found"
+                elif isinstance(exc, GatedRepoError):
+                    detail = "access restricted; check your Hugging Face access and sign in"
+                elif isinstance(exc, HfHubHTTPError) and getattr(exc.response, "status_code", None) == 404:
+                    detail = "revision or config.json not found"
+                else:
+                    detail = str(exc)
+                raise ValueError(f"Could not resolve Hub model {model_id} at {requested}: {detail}") from exc
+            revision = config_path.parent.name
+            if not re.fullmatch(r"[0-9a-f]{40}", revision) or (expected_revision and revision != expected_revision):
+                raise ValueError(f"Could not resolve the requested Hub revision for {model_id}: {revision}")
+            options["revision"] = revision
+        config = load_encoder_asset(AutoConfig.from_pretrained, source, options)
         if config.is_encoder_decoder:
             raise ValueError(f"{config.model_type} is an encoder–decoder model; a decoder-only causal LM is required")
         text_config = config.get_text_config()
@@ -68,13 +141,7 @@ class LLMExtractor:
         method = POOLING[pooling] if pooling else (
             expected["pooling"] if expected else POOLING["last-position"]
         )
-        name = model_dir.name
-        repository = model_dir.parent.parent.name
-        if model_dir.parent.name == "snapshots" and repository.startswith("models--"):
-            name = repository.removeprefix("models--").replace("--", "/")
-        if name.casefold().split("/")[-1] == LEGACY_MODEL_ID.casefold().split("/")[-1]:
-            name = LEGACY_MODEL_ID
-        self.tokenizer = AutoTokenizer.from_pretrained(model_dir, padding_side="right", **local)
+        self.tokenizer = load_encoder_asset(AutoTokenizer.from_pretrained, source, options, padding_side="right")
         pad_policy = expected["pad_token"] if expected else (
             "eos" if method == POOLING["last-position"] and self.tokenizer.eos_token_id is not None
             else "native" if self.tokenizer.pad_token_id is not None else "eos"
@@ -89,26 +156,27 @@ class LLMExtractor:
             "pad_token_id": self.tokenizer.pad_token_id, "pooling": method, "dtype": dtype,
             "tokenizer_class": type(self.tokenizer).__name__, "tokenizer_size": len(self.tokenizer),
         }
+        if revision:
+            self.provenance["revision"] = revision
         if expected is not None:
-            legacy = "model_type" not in expected and expected["model_id"] == LEGACY_MODEL_ID
             if legacy and config.model_type != "llama":
-                raise ValueError("Historical features require a compatible Llama 3 8B encoder")
+                raise ValueError("Historical features require a compatible Llama-3-8B encoder")
             for field, value in expected.items():
-                actual = self.provenance[field]
-                if field == "model_id":
-                    if legacy:
-                        continue
-                    # A local folder carries the model name without a Hub namespace.
-                    if "/" not in actual or "/" not in value:
-                        actual, value = actual.rsplit("/", 1)[-1], value.rsplit("/", 1)[-1]
-                if actual != value:
+                if field == "tokenizer_class" and self.provenance[field] != value:
+                    raise ValueError(
+                        f"Encoder tokenizer_class does not match the classifier's feature cache "
+                        f"(expected {value}, got {self.provenance[field]}). "
+                        "Use the same tokenizer implementation and Transformers version as for feature extraction"
+                    )
+                if field not in ("model_id", "revision") and self.provenance[field] != value:
                     raise ValueError(f"Encoder {field} does not match the classifier's feature cache")
         self.provenance["transformers_version"] = transformers.__version__
         self.provenance["torch_version"] = str(torch.__version__)
         placement = "auto" if device == "auto" else {"": str(torch.device(device))}
         try:
-            self.model = AutoModelForCausalLM.from_pretrained(
-                model_dir, config=config, dtype=getattr(torch, dtype), device_map=placement, **local,
+            self.model = load_encoder_asset(
+                AutoModelForCausalLM.from_pretrained, source, options,
+                config=config, dtype=getattr(torch, dtype), device_map=placement,
             ).eval()
         except ValueError as exc:
             raise ValueError(f"Could not load {config.model_type} as a Transformers causal LM: {exc}") from exc
@@ -192,8 +260,8 @@ def main():
         parser.error("Use a positive batch size and a new output directory")
     try:
         extractor = LLMExtractor(
-            args.model_dir, args.encoder_device, args.encoder_dtype, pooling=args.pooling,
-            max_tokens=args.max_tokens, trust_remote_code=args.trust_remote_code,
+            args.model_dir, args.encoder_device, args.encoder_dtype, model_id=args.model_id,
+            pooling=args.pooling, max_tokens=args.max_tokens, trust_remote_code=args.trust_remote_code,
         )
         counts = extract_cache(args.prepared, args.output, extractor, args.batch_size)
     except (OSError, ValueError) as exc:

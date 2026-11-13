@@ -6,7 +6,7 @@ from pathlib import Path
 
 from data import LEGACY_FEATURE_DIM, POOLING, SPLITS, encoder_settings, legacy_feature_definition
 from data import read_features, read_manifest
-from extract_features import LLMExtractor
+from extract_features import LLMExtractor, add_model_source_arguments
 from prepare_data import prepare_text
 from train import load_checkpoint, predict_classes, resolve_device
 
@@ -34,7 +34,7 @@ def main():
     inputs.add_argument("--features", type=Path, help="Feature CSV with optional sample IDs")
     inputs.add_argument("--text", action="append", help="One post, repeat for more posts from the same author")
     inputs.add_argument("--text-file", type=Path, help="UTF-8 text file containing one post")
-    parser.add_argument("--model-dir", type=Path, help="Local Transformers model directory for raw text")
+    add_model_source_arguments(parser)
     parser.add_argument("--encoder-device", default="auto")
     parser.add_argument("--encoder-dtype", choices=("bfloat16", "float32"))
     parser.add_argument("--pooling", choices=POOLING, help="Defaults to the checkpoint's pooling strategy")
@@ -44,8 +44,8 @@ def main():
     parser.add_argument("--device", default="auto", help="Classifier device")
     parser.add_argument("--batch-size", type=int, default=128)
     args = parser.parse_args()
-    if args.features is None and args.model_dir is None:
-        parser.error("Raw text prediction requires --model-dir")
+    if args.features is None and args.model_dir is None and args.model_id is None:
+        parser.error("Raw text prediction requires --model-dir or --model-id")
     try:
         device = resolve_device(args.device)
         model, state = load_checkpoint(args.checkpoint, device, trust_checkpoint=args.trust_checkpoint)
@@ -68,8 +68,8 @@ def main():
                 encoder = {**legacy_feature_definition(), "dtype": args.encoder_dtype or "bfloat16"}
             dtype = args.encoder_dtype or encoder["dtype"]
             extractor = LLMExtractor(
-                args.model_dir, args.encoder_device, dtype, expected=encoder, pooling=args.pooling,
-                max_tokens=args.max_tokens, trust_remote_code=args.trust_remote_code,
+                args.model_dir, args.encoder_device, dtype, expected=encoder, model_id=args.model_id,
+                pooling=args.pooling, max_tokens=args.max_tokens, trust_remote_code=args.trust_remote_code,
             )
             predictions = predict_text(model, state, posts, extractor, device)
     except (OSError, ValueError) as exc:

@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -58,9 +59,12 @@ def encoder_settings(encoder):
     """Select the metadata that affects feature compatibility."""
     if encoder is None:
         return None
-    keys = (*legacy_feature_definition(), "dtype", "model_type", "pad_token_id",
+    keys = (*legacy_feature_definition(), "revision", "dtype", "model_type", "pad_token_id",
             "tokenizer_class", "tokenizer_size")
     settings = {key: encoder[key] for key in keys if key in encoder}
+    if "revision" in settings and (not isinstance(settings["revision"], str)
+                                   or not re.fullmatch(r"[0-9a-f]{40}", settings["revision"])):
+        raise ValueError("Unsupported encoder revision; expected a Hugging Face commit ID")
     if (not isinstance(settings.get("model_id"), str) or not settings["model_id"]
             or type(settings.get("feature_dim")) is not int or settings["feature_dim"] < 1
             or type(settings.get("max_tokens")) is not int or settings["max_tokens"] < 1

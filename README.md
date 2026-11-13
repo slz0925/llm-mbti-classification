@@ -1,6 +1,6 @@
 # LLM + Small Models for MBTI Personality Detection
 
-This project combines pretrained large language models with lightweight classifiers for author-level MBTI prediction. Choose a compatible language model to extract and cache one representation per author, then train different classifiers on the same data splits without rerunning the encoder.
+This project presents a simple, efficient approach to author-level MBTI prediction by combining pretrained large language models with lightweight classifiers. It caches one representation per author so that different classifiers can be trained on the same data splits without rerunning the encoder. In our experiments, Llama-3-8B paired with several lightweight classifiers comfortably outperformed pre-2025 state-of-the-art baselines on most metrics and achieved the highest mean macro-F1 among the models compared.
 
 ## Architecture
 
@@ -46,19 +46,21 @@ Each run trains a separate classifier for one target. The 16-way task learns dir
 
 ## Installation and local resources
 
-Use Python 3.10 or later and an isolated virtual environment. Install the PyTorch build for your Python version and CPU or CUDA setup using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then install the project dependencies.
+Use Python 3.10 or later and an isolated virtual environment. Install PyTorch 2.6 or later for your Python version and CPU or CUDA setup using the [PyTorch installation selector](https://pytorch.org/get-started/locally/), then install the project dependencies.
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-Install the encoder dependencies for feature extraction or raw-text prediction. They use Transformers 4.x from 4.57.3.
+Install the encoder dependencies for feature extraction or raw-text prediction. They require Transformers 4.56 or later.
 
 ```bash
 python -m pip install -r requirements-encoder.txt
 ```
 
-Place the model weights, configuration and tokenizer in a local **Transformers-format** directory. The loader expects a decoder-only causal language model that accepts text token IDs and returns token-level hidden states. Examples include compatible Llama, Qwen2.5, Qwen3, Mistral, Gemma, Phi, DeepSeek and GLM text checkpoints. Models with custom implementations, such as Kimi K2 Instruct, need a compatible local implementation and its dependencies. Add `--trust-remote-code` to the extraction or raw-text prediction command only after reviewing the model code you intend to run.
+Choose a decoder-only causal language model that accepts text token IDs and returns token-level hidden states. Use `--model-dir` for an existing local Transformers directory containing the weights, configuration and tokenizer, or `--model-id` for a Hugging Face Hub model. Transformers downloads the Hub files on first use and reuses them from the local [Hugging Face cache](https://huggingface.co/docs/huggingface_hub/en/package_reference/environment_variables#hf_hub_cache). To relocate the cache, set `HF_HOME` or `HF_HUB_CACHE` to a location outside this repository. For gated models, obtain access and sign in with `hf auth login`. Inference runs locally with either source.
+
+Install additional packages if your model requires them, such as `sentencepiece` and `protobuf` for tokenizers that need SentencePiece conversion. Custom model code is disabled by default. Add `--trust-remote-code` only after reviewing the code you intend to run.
 
 Extraction defaults to BF16 and automatic device placement. Use `--encoder-device cuda:0` to select a GPU explicitly or `--encoder-dtype float32` when needed. Size memory for the chosen model and its activations. Classifier-only commands use the core requirements. PyTorch classifiers support CPU and CUDA, and scikit-learn classifiers run on CPU.
 
@@ -84,12 +86,14 @@ Preparation removes URLs and standalone MBTI type labels, groups posts by author
 
 ## Feature extraction
 
+Specify exactly one model source. The examples use a local Meta-Llama-3-8B-Instruct directory and a Hub-hosted Qwen model.
+
 ```bash
 python extract_features.py --prepared prepared/kaggle --model-dir models/Meta-Llama-3-8B-Instruct --output features/kaggle/llama3-last-position
-python extract_features.py --prepared prepared/kaggle --model-dir models/Qwen3-0.6B --pooling last-token --max-tokens 8192 --output features/kaggle/qwen3-last-token-8192
+python extract_features.py --prepared prepared/kaggle --model-id Qwen/Qwen3-0.6B --pooling last-token --max-tokens 8192 --output features/kaggle/qwen3-last-token-8192
 ```
 
-For PANDORA, use the corresponding prepared and output directories. Each split produces a feature CSV with a sample ID and columns `0` through `hidden_size - 1` (4,096 features for Llama 3 8B), paired with a label CSV in the same sample order. The manifest records the dataset, split sizes, cache ID, model, feature width, input length, dtype and pooling. Choose a length within the model's context and use a separate cache for each encoder, input length and pooling combination. Train and evaluate with the same cache, and reuse it across classifiers or tasks.
+For PANDORA, use the corresponding prepared and output directories. Each split produces a feature CSV with a sample ID and columns `0` through `hidden_size - 1` (4,096 features for Llama-3-8B), paired with a label CSV in the same sample order. The manifest records the dataset, split sizes, cache ID, model, feature width, input length, dtype and pooling. For Hub models it also records the resolved commit ID. Choose a length within the model's context and use a separate cache for each encoder, input length and pooling combination. Train and evaluate with the same cache, and reuse it across classifiers or tasks.
 
 For a 4,096-column cumulative cache, pass the directory containing `eval.csv` and `train_label.csv`, `test_label.csv` and `eval_label.csv`. The loader aligns labels with the train, test and validation blocks of `eval.csv` by row order.
 
@@ -125,14 +129,15 @@ Predict from a compatible feature CSV to get one JSON record per input row. The 
 python predict.py --checkpoint checkpoints/kaggle-linear-ie.pt --features features/kaggle/llama3-last-position/test.csv
 ```
 
-For an author whose text has not been encoded, provide one or more posts and the same local encoder used to build the training cache.
+For an author whose text has not been encoded, provide one or more posts and select the encoder used to build the training cache.
 
 ```bash
 python predict.py --checkpoint checkpoints/kaggle-linear-ie.pt --model-dir models/Meta-Llama-3-8B-Instruct --text "I spent the afternoon sketching plans for a small garden."
+python predict.py --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-checkpoint --model-id Qwen/Qwen3-0.6B --text "I enjoy exploring new ideas."
 ```
 
-Repeat `--text` for multiple posts in order, or use `--text-file` for a UTF-8 file containing one post. Use the same model weights and tokenizer as for feature extraction. Prediction uses the checkpoint's dataset, input length, pooling and dtype. An explicit `--max-tokens` must match the checkpoint. For a 4,096-column cumulative cache without encoder metadata, use the corresponding Llama 3 8B Instruct resources and the 2,048-token definition. Add `--trust-checkpoint` for a trusted `.joblib` classifier.
+Repeat `--text` for multiple posts in order, or use `--text-file` for a UTF-8 file containing one post. With `--model-id`, prediction uses the Hub revision recorded in the checkpoint when available. For a local model or a checkpoint without a recorded revision, supply the same weights and tokenizer used for extraction. Use the same Transformers version if a newer release changes your tokenizer. Prediction uses the checkpoint's dataset, input length, pooling and dtype. An explicit `--max-tokens` must match the checkpoint. For a 4,096-column cumulative cache without encoder metadata, use the corresponding Meta-Llama-3-8B-Instruct resources and the 2,048-token definition. Add `--trust-checkpoint` for a trusted `.joblib` classifier.
 
 ## Data access and citation
 
-Cite the dataset and encoder used in your experiments. [Kaggle MBTI dataset](https://www.kaggle.com/datasets/datasnaek/mbti-type) · [Gjurković et al. (2021), PANDORA Talks](https://aclanthology.org/2021.socialnlp-1.12/) · [Meta Llama 3 8B Instruct model card](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct)
+Cite the dataset and encoder used in your experiments. [Kaggle MBTI dataset](https://www.kaggle.com/datasets/datasnaek/mbti-type) · [Gjurković et al. (2021), PANDORA Talks](https://aclanthology.org/2021.socialnlp-1.12/) · [Meta-Llama-3-8B-Instruct model card](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct)
