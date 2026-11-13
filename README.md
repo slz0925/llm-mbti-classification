@@ -105,12 +105,6 @@ python train.py --dataset kaggle --features features/kaggle/llama3-last-position
 python evaluate.py --features features/kaggle/llama3-last-position --checkpoint checkpoints/kaggle-linear-ie.pt --output results/kaggle-linear-ie-test.json
 ```
 
-Train a CNN for the 16-way task on the same cached features.
-
-```bash
-python train.py --dataset kaggle --features features/kaggle/llama3-last-position --classifier cnn --task type --epochs 30 --checkpoint checkpoints/kaggle-cnn-type.pt
-```
-
 For a classical model on the Qwen cache, train and evaluate a direct 16-way logistic regression classifier.
 
 ```bash
@@ -118,14 +112,14 @@ python train.py --dataset kaggle --features features/kaggle/qwen3-14b-last-token
 python evaluate.py --features features/kaggle/qwen3-14b-last-token-8192 --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-checkpoint --output results/kaggle-logistic-type-test.json
 ```
 
-Install XGBoost only if you want to train it or load one of its checkpoints. It uses the same cached features as the other classifiers.
+XGBoost is an optional dependency. Install it to train an XGBoost classifier or load one of its checkpoints. Like the other lightweight classifiers, XGBoost uses the same cached features and follows the same training, evaluation and prediction workflow.
 
 ```bash
 python -m pip install xgboost
 python train.py --dataset kaggle --features features/kaggle/qwen3-14b-last-token-8192 --classifier xgboost --task type --checkpoint checkpoints/kaggle-xgboost-type.joblib
 ```
 
-For XGBoost training, evaluation and prediction, use `--device auto` (the default), `--device cpu` or `--device cuda:0`. Automatic selection uses CUDA when available to XGBoost. Explicit CUDA selection requires XGBoost 2.0 or later with CUDA support and an available GPU.
+Like the PyTorch classifiers, XGBoost supports `--device auto` (the default), `--device cpu` and `--device cuda:0` for training, evaluation and prediction. Automatic selection uses CUDA when available to XGBoost. Explicit CUDA selection requires XGBoost 2.0 or later with CUDA support and an available GPU.
 
 PyTorch classifiers use Adam and cross-entropy with full-batch updates by default. Set `--lr`, `--epochs` and `--batch-size` as needed. Validation macro-F1 selects the epoch, and `.pt` stores a state dictionary. Logistic regression and the SVMs compare `C=0.1` and `C=1.0`. Random forest compares unlimited depth and depth 12. XGBoost compares depths 3 and 6 with 100 boosting rounds. Each candidate is fitted on training rows only, including any standardisation, and validation macro-F1 selects the fitted estimator. RBF SVM can take substantially longer on large splits. Load `.joblib` checkpoints only from trusted sources with `--trust-checkpoint`, using the same library versions as for training.
 
