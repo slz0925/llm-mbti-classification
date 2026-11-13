@@ -107,7 +107,10 @@ def atomic_file(destination):
 def read_manifest(directory, expected_format):
     path = Path(directory) / "manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    if manifest.get("format") != expected_format or manifest.get("version") not in (1, 2):
+    version = manifest.get("version")
+    if expected_format == manifest.get("format") == "mbti-features" and version == 1:
+        raise ValueError(f"Unsupported v1 split feature cache; use a v2 feature cache: {path}")
+    if manifest.get("format") != expected_format or version not in (1, 2):
         raise ValueError(f"Unsupported manifest format: {path}")
     if manifest.get("dataset") not in DATASETS or set(manifest.get("splits", {})) != set(SPLITS):
         raise ValueError(f"Invalid dataset or splits in {path}")
@@ -239,10 +242,9 @@ class FeatureCache:
                 raise ValueError("Missing encoder feature definition in cache manifest")
             self.feature_dim = self.encoder["feature_dim"]
             self.split_rows = {split: self.manifest["splits"][split]["rows"] for split in SPLITS}
-            if self.manifest["version"] == 2:
-                self.cache_id = self.manifest.get("cache_id")
-                if not isinstance(self.cache_id, str) or not self.cache_id:
-                    raise ValueError("Missing feature cache ID")
+            self.cache_id = self.manifest.get("cache_id")
+            if not isinstance(self.cache_id, str) or not self.cache_id:
+                raise ValueError("Missing feature cache ID")
         else:
             self.encoder = None
             self.feature_dim = LEGACY_FEATURE_DIM
@@ -263,11 +265,8 @@ class FeatureCache:
         if self.manifest is not None:
             feature_path = self.directory / f"{split}.csv"
             labels, ids = self.load_split_labels(split)
-            has_ids = self.manifest["version"] == 2
-            features, feature_ids = read_features(
-                feature_path, with_ids=has_ids, feature_dim=self.feature_dim,
-            )
-            if has_ids and feature_ids != ids:
+            features, feature_ids = read_features(feature_path, with_ids=True, feature_dim=self.feature_dim)
+            if feature_ids != ids:
                 raise ValueError(f"Feature and label sample IDs do not align in split {split}")
         else:
             legacy_name = "eval" if split == "validation" else split

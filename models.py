@@ -1,9 +1,11 @@
 """Classifier heads for one cached author representation at a time."""
 
+import json
 import math
+import warnings
 
 import numpy as np
-from torch import nn
+from torch import device as torch_device, nn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
@@ -89,6 +91,45 @@ class CNNClassifier(nn.Module):
 XGBOOST_INSTALL = "Install XGBoost with: python -m pip install xgboost"
 
 
+def xgboost_booster_device(booster):
+    return json.loads(booster.save_config())["learner"]["generic_param"].get("device")
+
+
+def xgboost_device(requested):
+    automatic = requested == "auto"
+    try:
+        device = torch_device("cuda" if automatic else requested)
+    except RuntimeError as exc:
+        raise ValueError("XGBoost --device must be auto, cpu or cuda:N") from exc
+    if device.type == "cpu":
+        return "cpu"
+    if device.type != "cuda":
+        raise ValueError("XGBoost --device must be auto, cpu or cuda:N")
+    import xgboost
+
+    target = f"cuda:{device.index if device.index is not None else 0}"
+    build_info = getattr(xgboost, "build_info", None)
+    if build_info is None or not build_info().get("USE_CUDA"):
+        if automatic:
+            return "cpu"
+        raise ValueError("XGBoost CUDA requires a CUDA-enabled XGBoost build with device support (2.0 or later)")
+    try:
+        # XGBoost can accept a CUDA request while resolving it to CPU.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            booster = xgboost.Booster(params={"device": target, "num_feature": 1})
+            actual = xgboost_booster_device(booster)
+    except xgboost.core.XGBoostError as exc:
+        if automatic:
+            return "cpu"
+        raise ValueError(f"XGBoost cannot use {target}: {str(exc).splitlines()[0]}") from exc
+    if actual == target:
+        return target
+    if automatic:
+        return "cpu"
+    raise ValueError(f"XGBoost cannot use {target}: resolved device is {actual or 'unavailable'}")
+
+
 class XGBoostClassifier:
     """Map the observed task labels to the contiguous IDs required by XGBoost."""
 
@@ -110,13 +151,29 @@ class XGBoostClassifier:
     def fit(self, features, labels):
         self.classes_, encoded = np.unique(labels, return_inverse=True)
         self.estimator.fit(features, encoded)
+        self.check_device()
         return self
 
     def predict(self, features):
-        return self.classes_[self.estimator.predict(features)]
+        encoded = self.estimator.predict(features)
+        self.check_device()
+        return self.classes_[encoded]
+
+    def set_device(self, requested):
+        target = xgboost_device(requested)
+        if target != "cpu" or hasattr(self.estimator, "device"):
+            self.estimator.set_params(device=target)
+
+    def check_device(self):
+        requested = getattr(self.estimator, "device", None)
+        if requested and requested.startswith("cuda"):
+            actual = xgboost_booster_device(self.estimator.get_booster())
+            if actual != requested:
+                raise ValueError(f"XGBoost cannot use {requested}: resolved device is {actual or 'unavailable'}")
 
     def get_params(self, deep=False):
         params = self.estimator.get_params(deep=deep)
+        params.pop("device", None)
         missing = params.get("missing")
         if isinstance(missing, float) and math.isnan(missing):
             # Compare checkpoint metadata reliably after deserialisation.
@@ -155,10 +212,12 @@ def build_classifier(name, config):
     return TORCH_CLASSIFIERS[name][0](**config)
 
 
-def sklearn_candidates(name, seed):
+def sklearn_candidates(name, seed, *, device="auto"):
     if name == "xgboost":
         for depth in (3, 6):
-            yield XGBoostClassifier(depth, seed)
+            candidate = XGBoostClassifier(depth, seed)
+            candidate.set_device(device)
+            yield candidate
         return
     if name == "random-forest":
         for depth in (None, 12):

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from data import FeatureCache, TASK_COLUMN, atomic_file, encoder_settings, write_json
-from train import load_checkpoint, metrics, predict_classes, resolve_device
+from train import load_checkpoint, metrics, predict_classes
 
 
 def evaluate_checkpoint(feature_dir, model, state, device, batch_size):
@@ -59,7 +59,7 @@ def main():
     try:
         if args.output and args.output.resolve() == args.checkpoint.resolve():
             raise ValueError("Evaluation output must differ from the checkpoint path")
-        device = resolve_device(args.device)
+        device = args.device
         model, state = load_checkpoint(args.checkpoint, device, trust_checkpoint=args.trust_checkpoint)
         report = evaluate_checkpoint(args.features, model, state, device, args.batch_size)
         if args.output:

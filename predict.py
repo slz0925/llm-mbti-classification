@@ -8,7 +8,7 @@ from data import LEGACY_FEATURE_DIM, POOLING, SPLITS, encoder_settings, legacy_f
 from data import read_features, read_manifest
 from extract_features import LLMExtractor, add_model_source_arguments
 from prepare_data import prepare_text
-from train import load_checkpoint, predict_classes, resolve_device
+from train import load_checkpoint, predict_classes
 
 
 def predict_text(model, state, posts, extractor, device):
@@ -47,7 +47,7 @@ def main():
     if args.features is None and args.model_dir is None and args.model_id is None:
         parser.error("Raw text prediction requires --model-dir or --model-id")
     try:
-        device = resolve_device(args.device)
+        device = args.device
         model, state = load_checkpoint(args.checkpoint, device, trust_checkpoint=args.trust_checkpoint)
         if args.features is not None:
             directory = args.features.parent

@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import inspect
 import json
 import re
 from pathlib import Path
@@ -182,6 +183,15 @@ class LLMExtractor:
             raise ValueError(f"Could not load {config.model_type} as a Transformers causal LM: {exc}") from exc
         self.device = model_input_device(self.model)
         self.feature_dim = width
+        implementation = type(self.model)
+        self.forward_options = {}
+        if (f"{implementation.__module__}.{implementation.__name__}" in {
+                "transformers.models.llama.modeling_llama.LlamaForCausalLM",
+                "transformers.models.qwen2.modeling_qwen2.Qwen2ForCausalLM",
+                "transformers.models.qwen3.modeling_qwen3.Qwen3ForCausalLM",
+        } and "logits_to_keep" in inspect.signature(self.model.forward).parameters):
+            # Keep all token hidden states and project only the final position to the vocabulary.
+            self.forward_options["logits_to_keep"] = 1
 
     @torch.inference_mode()
     def encode(self, texts):
@@ -194,6 +204,7 @@ class LLMExtractor:
             input_ids=tokens["input_ids"].to(self.device),
             attention_mask=mask,
             output_hidden_states=True, use_cache=False, return_dict=True,
+            **self.forward_options,
         )
         states = getattr(result, "hidden_states", None)
         if (not isinstance(states, (tuple, list)) or not states

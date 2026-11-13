@@ -59,11 +59,11 @@ Install the encoder dependencies for feature extraction or raw-text prediction. 
 python -m pip install -r requirements-encoder.txt
 ```
 
-Choose a decoder-only causal language model that accepts text token IDs and returns token-level hidden states. Use `--model-dir` for an existing local Transformers directory containing the weights, configuration and tokenizer, or `--model-id` for a Hugging Face Hub model. Transformers downloads the Hub files on first use and reuses them from the local [Hugging Face cache](https://huggingface.co/docs/huggingface_hub/en/package_reference/environment_variables#hf_hub_cache). To relocate the cache, set `HF_HOME` or `HF_HUB_CACHE` to a location outside this repository. For gated models, obtain access and sign in with `hf auth login`. Inference runs locally with either source.
+Choose a decoder-only causal language model that accepts text token IDs and returns token-level hidden states. We recommend models with at least 8 billion parameters for feature extraction. Use `--model-dir` for an existing local Transformers directory containing the weights, configuration and tokenizer, or `--model-id` for a Hugging Face Hub model. Transformers downloads the Hub files on first use and reuses them from the local [Hugging Face cache](https://huggingface.co/docs/huggingface_hub/en/package_reference/environment_variables#hf_hub_cache). To relocate the cache, set `HF_HOME` or `HF_HUB_CACHE` to a location outside this repository. For gated models, obtain access and sign in with `hf auth login`. Inference runs locally with either source.
 
 Install additional packages if your model requires them, such as `sentencepiece` and `protobuf` for tokenizers that need SentencePiece conversion. Custom model code is disabled by default. Add `--trust-remote-code` only after reviewing the code you intend to run.
 
-Extraction defaults to BF16 and automatic device placement. Use `--encoder-device cuda:0` to select a GPU explicitly or `--encoder-dtype float32` when needed. Size memory for the chosen model and its activations. Classifier-only commands use the core requirements. PyTorch classifiers support CPU and CUDA, and scikit-learn classifiers run on CPU.
+Extraction defaults to BF16 and automatic device placement. Use `--encoder-device cuda:0` to select a GPU explicitly or `--encoder-dtype float32` when needed. Classifier-only commands use the core requirements. PyTorch classifiers and XGBoost support CPU and CUDA. The other scikit-learn classifiers run on CPU.
 
 ## Data preparation
 
@@ -87,11 +87,11 @@ Preparation removes URLs and standalone MBTI type labels, groups posts by author
 
 ## Feature extraction
 
-Specify exactly one model source. The examples use a local Meta-Llama-3-8B-Instruct directory and a Hub-hosted Qwen model.
+Specify exactly one model source. The examples use Meta-Llama-3-8B-Instruct from a local directory and Qwen3-14B from the Hugging Face Hub.
 
 ```bash
 python extract_features.py --prepared prepared/kaggle --model-dir models/Meta-Llama-3-8B-Instruct --output features/kaggle/llama3-last-position
-python extract_features.py --prepared prepared/kaggle --model-id Qwen/Qwen3-0.6B --pooling last-token --max-tokens 8192 --output features/kaggle/qwen3-last-token-8192
+python extract_features.py --prepared prepared/kaggle --model-id Qwen/Qwen3-14B --pooling last-token --max-tokens 8192 --output features/kaggle/qwen3-14b-last-token-8192
 ```
 
 For PANDORA, use the corresponding prepared and output directories. Each split produces a feature CSV with a sample ID and columns `0` through `hidden_size - 1` (4,096 features for Llama-3-8B), paired with a label CSV in the same sample order. The manifest records the dataset, split sizes, cache ID, model, feature width, input length, dtype and pooling. For Hub models it also records the resolved commit ID. Choose a length within the model's context and use a separate cache for each encoder, input length and pooling combination. Train and evaluate with the same cache, and reuse it across classifiers or tasks.
@@ -114,16 +114,18 @@ python train.py --dataset kaggle --features features/kaggle/llama3-last-position
 For a classical model on the Qwen cache, train and evaluate a direct 16-way logistic regression classifier.
 
 ```bash
-python train.py --dataset kaggle --features features/kaggle/qwen3-last-token-8192 --classifier logistic --task type --checkpoint checkpoints/kaggle-logistic-type.joblib
-python evaluate.py --features features/kaggle/qwen3-last-token-8192 --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-checkpoint --output results/kaggle-logistic-type-test.json
+python train.py --dataset kaggle --features features/kaggle/qwen3-14b-last-token-8192 --classifier logistic --task type --checkpoint checkpoints/kaggle-logistic-type.joblib
+python evaluate.py --features features/kaggle/qwen3-14b-last-token-8192 --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-checkpoint --output results/kaggle-logistic-type-test.json
 ```
 
 Install XGBoost only if you want to train it or load one of its checkpoints. It uses the same cached features as the other classifiers.
 
 ```bash
 python -m pip install xgboost
-python train.py --dataset kaggle --features features/kaggle/qwen3-last-token-8192 --classifier xgboost --task type --checkpoint checkpoints/kaggle-xgboost-type.joblib
+python train.py --dataset kaggle --features features/kaggle/qwen3-14b-last-token-8192 --classifier xgboost --task type --checkpoint checkpoints/kaggle-xgboost-type.joblib
 ```
+
+For XGBoost training, evaluation and prediction, use `--device auto` (the default), `--device cpu` or `--device cuda:0`. Automatic selection uses CUDA when available to XGBoost. Explicit CUDA selection requires XGBoost 2.0 or later with CUDA support and an available GPU.
 
 PyTorch classifiers use Adam and cross-entropy with full-batch updates by default. Set `--lr`, `--epochs` and `--batch-size` as needed. Validation macro-F1 selects the epoch, and `.pt` stores a state dictionary. Logistic regression and the SVMs compare `C=0.1` and `C=1.0`. Random forest compares unlimited depth and depth 12. XGBoost compares depths 3 and 6 with 100 boosting rounds. Each candidate is fitted on training rows only, including any standardisation, and validation macro-F1 selects the fitted estimator. RBF SVM can take substantially longer on large splits. Load `.joblib` checkpoints only from trusted sources with `--trust-checkpoint`, using the same library versions as for training.
 
@@ -141,10 +143,10 @@ For an author whose text has not been encoded, provide one or more posts and sel
 
 ```bash
 python predict.py --checkpoint checkpoints/kaggle-linear-ie.pt --model-dir models/Meta-Llama-3-8B-Instruct --text "I spent the afternoon sketching plans for a small garden."
-python predict.py --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-checkpoint --model-id Qwen/Qwen3-0.6B --text "I enjoy exploring new ideas."
+python predict.py --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-checkpoint --model-id Qwen/Qwen3-14B --text "I enjoy exploring new ideas."
 ```
 
-Repeat `--text` for multiple posts in order, or use `--text-file` for a UTF-8 file containing one post. With `--model-id`, prediction uses the Hub revision recorded in the checkpoint when available. For a local model or a checkpoint without a recorded revision, supply the same weights and tokenizer used for extraction. Use the same Transformers version if a newer release changes your tokenizer. Prediction uses the checkpoint's dataset, input length, pooling and dtype. An explicit `--max-tokens` must match the checkpoint. For a 4,096-column cumulative cache without encoder metadata, use the corresponding Meta-Llama-3-8B-Instruct resources and the 2,048-token definition. Add `--trust-checkpoint` for a trusted `.joblib` classifier.
+Repeat `--text` for multiple posts in order, or use `--text-file` for a UTF-8 file containing one post. With `--model-id`, prediction uses the Hub revision recorded in the checkpoint when available. For a local model or a checkpoint without a recorded revision, supply the same weights and tokenizer used for extraction. Use the same Transformers version if a newer release changes your tokenizer. Prediction uses the checkpoint's dataset, input length, pooling and dtype. An explicit `--max-tokens` must match the checkpoint. For a 4,096-column cumulative cache without encoder metadata, use the corresponding Meta-Llama-3-8B-Instruct resources and the 2,048-token definition.
 
 ## Data access and citation
 

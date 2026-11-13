@@ -42,6 +42,7 @@ def predict_classes(model, features, device, batch_size, *, feature_dim):
         raise ValueError("Batch size must be positive")
     if not isinstance(model, nn.Module):
         return model.predict(features).tolist()
+    device = resolve_device(device)
     model.eval()
     predicted = []
     for start in range(0, len(features), batch_size):
@@ -55,6 +56,8 @@ def predict_classes(model, features, device, batch_size, *, feature_dim):
 
 def train_classifier(cache, classifier, task, checkpoint, device, *, epochs, lr, batch_size, seed):
     classical = classifier in SKLEARN_CLASSIFIERS
+    if classifier != "xgboost":
+        device = resolve_device(device)
     if (Path(checkpoint).suffix.lower() == ".joblib") != classical:
         raise ValueError("Use .joblib for scikit-learn checkpoints and .pt for PyTorch checkpoints")
     train, validation = cache.load("train"), cache.load("validation")
@@ -76,7 +79,7 @@ def train_classifier(cache, classifier, task, checkpoint, device, *, epochs, lr,
         if np.unique(train_labels).size < 2:
             raise ValueError(f"{classifier} requires at least two classes in the training split")
         best, selected = None, None
-        for estimator in sklearn_candidates(classifier, seed):
+        for estimator in sklearn_candidates(classifier, seed, device=device):
             estimator.fit(train.features, train_labels)
             predictions = predict_classes(estimator, validation.features, device, 1, feature_dim=width)
             score = metrics(validation_labels, predictions, num_classes)
@@ -155,6 +158,8 @@ def load_checkpoint(path, device, *, trust_checkpoint=False):
     if state["classes"] != list(TASKS[state["task"]]):
         raise ValueError("Checkpoint class mapping does not match the task")
     config = state["model_config"]
+    if state["classifier"] != "xgboost":
+        device = resolve_device(device)
     width = state["feature_dim"]
     encoder = encoder_settings(state["encoder"])
     if encoder is not None and encoder["feature_dim"] != width:
@@ -166,10 +171,13 @@ def load_checkpoint(path, device, *, trust_checkpoint=False):
             raise ValueError("Checkpoint estimator does not match its classifier")
         if state["classifier"] == "xgboost":
             model.validate_label_mapping()
+            config = {key: value for key, value in config.items() if key != "device"}
         fitted = model[-1] if hasattr(model, "steps") else model
         if (getattr(model, "n_features_in_", None) != width or fitted.get_params(deep=False) != config
                 or not set(model.classes_).issubset(range(len(state["classes"])))):
             raise ValueError("Checkpoint estimator does not match its feature width, configuration or task")
+        if state["classifier"] == "xgboost":
+            model.set_device(device)
         return model, state
     expected = model_config(state["classifier"], width, len(state["classes"]))
     if config != expected:
@@ -195,7 +203,7 @@ def main():
     try:
         cache = FeatureCache(args.features, args.dataset)
         best = train_classifier(
-            cache, args.classifier, args.task, args.checkpoint, resolve_device(args.device),
+            cache, args.classifier, args.task, args.checkpoint, args.device,
             epochs=args.epochs, lr=args.lr, batch_size=args.batch_size, seed=args.seed,
         )
     except (OSError, ValueError) as exc:
