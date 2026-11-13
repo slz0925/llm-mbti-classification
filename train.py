@@ -13,7 +13,10 @@ from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from torch import nn
 
 from data import DATASETS, TASK_COLUMN, TASKS, FeatureCache, atomic_file, encoder_settings
-from models import CLASSIFIERS, SKLEARN_CLASSIFIERS, build_classifier, model_config, sklearn_candidates
+from models import (
+    CLASSIFIERS, SKLEARN_CLASSIFIERS, XGBOOST_INSTALL, XGBoostClassifier,
+    build_classifier, model_config, sklearn_candidates,
+)
 
 
 def resolve_device(name):
@@ -137,7 +140,12 @@ def load_checkpoint(path, device, *, trust_checkpoint=False):
     classical = Path(path).suffix.lower() == ".joblib"
     if classical and not trust_checkpoint:
         raise ValueError("Only load trusted .joblib checkpoints. Pass --trust-checkpoint for your own files")
-    state = joblib.load(path) if classical else torch.load(path, map_location="cpu", weights_only=True)
+    try:
+        state = joblib.load(path) if classical else torch.load(path, map_location="cpu", weights_only=True)
+    except ModuleNotFoundError as exc:
+        if not classical or exc.name != "xgboost":
+            raise
+        raise ValueError(XGBOOST_INSTALL) from exc
     if (not isinstance(state, dict) or state.get("version") not in (1, 2)
             or state.get("task") not in TASKS or state.get("dataset") not in DATASETS
             or state.get("classifier") not in CLASSIFIERS
@@ -154,6 +162,10 @@ def load_checkpoint(path, device, *, trust_checkpoint=False):
     state["encoder"] = encoder
     if classical:
         model = state["estimator"]
+        if isinstance(model, XGBoostClassifier) != (state["classifier"] == "xgboost"):
+            raise ValueError("Checkpoint estimator does not match its classifier")
+        if state["classifier"] == "xgboost":
+            model.validate_label_mapping()
         fitted = model[-1] if hasattr(model, "steps") else model
         if (getattr(model, "n_features_in_", None) != width or fitted.get_params(deep=False) != config
                 or not set(model.classes_).issubset(range(len(state["classes"])))):

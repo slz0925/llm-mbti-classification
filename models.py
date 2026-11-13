@@ -1,5 +1,8 @@
 """Classifier heads for one cached author representation at a time."""
 
+import math
+
+import numpy as np
 from torch import nn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -83,6 +86,51 @@ class CNNClassifier(nn.Module):
         return self.fc(self.features(x))
 
 
+XGBOOST_INSTALL = "Install XGBoost with: python -m pip install xgboost"
+
+
+class XGBoostClassifier:
+    """Map the observed task labels to the contiguous IDs required by XGBoost."""
+
+    def __init__(self, max_depth, seed):
+        try:
+            from xgboost import XGBClassifier
+        except ModuleNotFoundError as exc:
+            if exc.name != "xgboost":
+                raise
+            raise ValueError(XGBOOST_INSTALL) from exc
+        self.estimator = XGBClassifier(
+            n_estimators=100, max_depth=max_depth, learning_rate=0.1, tree_method="hist", random_state=seed,
+        )
+
+    @property
+    def n_features_in_(self):
+        return self.estimator.n_features_in_
+
+    def fit(self, features, labels):
+        self.classes_, encoded = np.unique(labels, return_inverse=True)
+        self.estimator.fit(features, encoded)
+        return self
+
+    def predict(self, features):
+        return self.classes_[self.estimator.predict(features)]
+
+    def get_params(self, deep=False):
+        params = self.estimator.get_params(deep=deep)
+        missing = params.get("missing")
+        if isinstance(missing, float) and math.isnan(missing):
+            # Compare checkpoint metadata reliably after deserialisation.
+            params["missing"] = "NaN"
+        return params
+
+    def validate_label_mapping(self):
+        labels = getattr(self, "classes_", None)
+        if (not isinstance(labels, np.ndarray) or labels.ndim != 1 or labels.dtype.kind not in "iu"
+                or len(labels) < 2 or not np.all(labels[1:] > labels[:-1])
+                or not np.array_equal(self.estimator.classes_, np.arange(len(labels)))):
+            raise ValueError("XGBoost checkpoint has an invalid training label mapping")
+
+
 TORCH_CLASSIFIERS = {
     "linear": (LinearClassifier, {}),
     "mlp": (MLPClassifier, {"hidden_size": 256}),
@@ -92,7 +140,7 @@ TORCH_CLASSIFIERS = {
     "cnn": (CNNClassifier, {}),
 }
 
-SKLEARN_CLASSIFIERS = ("logistic", "svm-linear", "svm-rbf", "random-forest")
+SKLEARN_CLASSIFIERS = ("logistic", "svm-linear", "svm-rbf", "random-forest", "xgboost")
 CLASSIFIERS = (*TORCH_CLASSIFIERS, *SKLEARN_CLASSIFIERS)
 
 
@@ -108,6 +156,10 @@ def build_classifier(name, config):
 
 
 def sklearn_candidates(name, seed):
+    if name == "xgboost":
+        for depth in (3, 6):
+            yield XGBoostClassifier(depth, seed)
+        return
     if name == "random-forest":
         for depth in (None, 12):
             yield RandomForestClassifier(n_estimators=100, max_depth=depth, random_state=seed)

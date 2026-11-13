@@ -29,6 +29,7 @@ The frozen encoder right-pads or truncates to `--max-tokens` (**2,048** by defau
 | `svm-linear` | Linear SVM with training-set standardisation |
 | `svm-rbf` | RBF-kernel SVM with training-set standardisation |
 | `random-forest` | Random forest with 100 trees |
+| `xgboost` | Gradient-boosted trees fitted directly on cached features |
 
 The recurrent classifiers receive `[batch, 1, hidden_size]` and process one time step per author. Each vector represents the entire author input.
 
@@ -117,7 +118,14 @@ python train.py --dataset kaggle --features features/kaggle/qwen3-last-token-819
 python evaluate.py --features features/kaggle/qwen3-last-token-8192 --checkpoint checkpoints/kaggle-logistic-type.joblib --trust-checkpoint --output results/kaggle-logistic-type-test.json
 ```
 
-PyTorch classifiers use Adam and cross-entropy with full-batch updates by default. Set `--lr`, `--epochs` and `--batch-size` as needed. Validation macro-F1 selects the epoch, and `.pt` stores a state dictionary. Logistic regression and the SVMs compare `C=0.1` and `C=1.0`. Random forest compares unlimited depth and depth 12. Each candidate is fitted on training rows only, including any standardisation, and validation macro-F1 selects the fitted pipeline. RBF SVM can take substantially longer on large splits. The `.joblib` files contain the fitted model and preprocessing. Load them only from trusted sources with `--trust-checkpoint`, using the scikit-learn version that wrote them.
+Install XGBoost only if you want to train it or load one of its checkpoints. It uses the same cached features as the other classifiers.
+
+```bash
+python -m pip install xgboost
+python train.py --dataset kaggle --features features/kaggle/qwen3-last-token-8192 --classifier xgboost --task type --checkpoint checkpoints/kaggle-xgboost-type.joblib
+```
+
+PyTorch classifiers use Adam and cross-entropy with full-batch updates by default. Set `--lr`, `--epochs` and `--batch-size` as needed. Validation macro-F1 selects the epoch, and `.pt` stores a state dictionary. Logistic regression and the SVMs compare `C=0.1` and `C=1.0`. Random forest compares unlimited depth and depth 12. XGBoost compares depths 3 and 6 with 100 boosting rounds. Each candidate is fitted on training rows only, including any standardisation, and validation macro-F1 selects the fitted estimator. RBF SVM can take substantially longer on large splits. Load `.joblib` checkpoints only from trusted sources with `--trust-checkpoint`, using the same library versions as for training.
 
 Run the separate test command after model selection. It reports accuracy, macro-F1, macro precision and macro recall, plus a majority-class baseline fitted to the training labels. Macro metrics give every class equal weight and assign zero to undefined per-class scores.
 
